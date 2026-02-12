@@ -1,200 +1,158 @@
 import telebot
+import os, json, datetime
 from telebot import types
-import requests
-import os
-import json
-import time
-from datetime import datetime
-from collections import defaultdict
+from openai import OpenAI
+from reportlab.pdfgen import canvas
+from PyPDF2 import PdfReader
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_KEY = os.getenv("GAPGPT_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-FORCE_CHANNEL = os.getenv("FORCE_CHANNEL")
+# ================= CONFIG =================
+BOT_TOKEN = "TELEGRAM_BOT_TOKEN"
+ADMIN_ID = 123456789
+CHANNEL_USERNAME = "@your_channel"
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set")
+GAPGPT_API_KEY = "YOUR_GAPGPT_API_KEY"
+GAPGPT_BASE_URL = "https://api.gapgpt.app/v1"
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+# ================= BOT ====================
+bot = telebot.TeleBot(BOT_TOKEN)
+client = OpenAI(
+    base_url=GAPGPT_BASE_URL,
+    api_key=GAPGPT_API_KEY
+)
 
-DB_FILE = "db.json"
-IMAGE_LIMIT = 5
+# ================= FILES ==================
+USERS_FILE = "users.json"
+MEMORY_FILE = "memory.json"
+LIMIT_FILE = "daily_limit.json"
 
-def load_db():
-    if not os.path.exists(DB_FILE):
-        return {}
-    with open(DB_FILE, "r", encoding="utf-8") as f:
+# ================= UTILS ==================
+def load(file, default):
+    if not os.path.exists(file):
+        with open(file, "w", encoding="utf-8") as f:
+            json.dump(default, f)
+    with open(file, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_db(db):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(db, f, ensure_ascii=False, indent=2)
+def save(file, data):
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-db = load_db()
+users = load(USERS_FILE, {})
+memory = load(MEMORY_FILE, {})
+limits = load(LIMIT_FILE, {})
 
-def user_data(user):
-    uid = str(user.id)
-    if uid not in db:
-        db[uid] = {
-            "verified": False,
-            "history": [],
-            "images_today": 0,
-            "last_image_day": str(datetime.utcnow().date())
-        }
-        save_db(db)
-    return db[uid]
-
-def reset_daily_limits(u):
-    today = str(datetime.utcnow().date())
-    if u["last_image_day"] != today:
-        u["images_today"] = 0
-        u["last_image_day"] = today
+def today():
+    return str(datetime.date.today())
 
 def is_member(user_id):
     try:
-        m = bot.get_chat_member(FORCE_CHANNEL, user_id)
-        return m.status in ["member", "administrator", "creator"]
+        s = bot.get_chat_member(CHANNEL_USERNAME, user_id).status
+        return s in ["member", "administrator", "creator"]
     except:
         return False
 
-def join_required(msg):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("✅ عضو شدم", callback_data="check_join"))
-    bot.send_message(
-        msg.chat.id,
-        "❌ برای استفاده از ربات باید:\n"
-        "1️⃣ عضو کانال شوید\n"
-        "2️⃣ به آخرین پست ریکشن بزنید\n\n"
-        "سپس روی «عضو شدم» بزنید ✅",
-        reply_markup=kb
+# ================= MEMORY =================
+def add_memory(uid, role, text):
+    uid = str(uid)
+    memory.setdefault(uid, [])
+    memory[uid].append({"role": role, "content": text})
+    memory[uid] = memory[uid][-10:]
+    save(MEMORY_FILE, memory)
+
+# ================= AI CHAT ================
+def ai_chat(user_id, text):
+    uid = str(user_id)
+    msgs = memory.get(uid, [])
+    msgs.append({"role": "user", "content": text})
+
+    res = client.chat.completions.create(
+        model="gpt-4o",
+        messages=msgs
     )
 
-@bot.callback_query_handler(func=lambda c: c.data == "check_join")
-def check_join(call):
-    u = user_data(call.from_user)
-    if is_member(call.from_user.id):
-        u["verified"] = True
-        save_db(db)
-        bot.answer_callback_query(call.id, "✅ تایید شد")
-        bot.send_message(call.message.chat.id, "✅ حالا می‌تونی پیام بفرستی")
-    else:
-        bot.answer_callback_query(call.id, "❌ هنوز عضو نیستی", show_alert=True)
+    answer = res.choices[0].message.content
+    add_memory(user_id, "user", text)
+    add_memory(user_id, "assistant", answer)
+    return answer
 
-def chat_ai(messages):
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "gpt-4.1-mini",
-                "messages": messages
-            },
-            timeout=60
-        ).json()
-        return r["choices"][0]["message"]["content"]
-    except:
-        return "❌ خطا از سمت سرور هوش مصنوعی"
+# ================= IMAGE LIMIT ============
+def can_image(user_id):
+    if user_id == ADMIN_ID:
+        return True
 
-def image_ai(prompt):
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "gpt-image-1",
-                "prompt": prompt,
-                "size": "1024x1024"
-            },
-            timeout=60
-        ).json()
-        return r["data"][0]["url"]
-    except:
-        return None
+    uid = str(user_id)
+    limits.setdefault(uid, {})
+    limits[uid].setdefault(today(), 0)
 
-@bot.message_handler(commands=["reset"])
-def reset_user(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
-    try:
-        uid = msg.text.split()[1]
-        if uid in db:
-            db[uid]["verified"] = False
-            save_db(db)
-            bot.reply_to(msg, "✅ ریست شد")
-    except:
-        bot.reply_to(msg, "❌ فرمت: /reset USER_ID")
+    if limits[uid][today()] >= 5:
+        return False
 
+    limits[uid][today()] += 1
+    save(LIMIT_FILE, limits)
+    return True
+
+# ================= START ==================
+@bot.message_handler(commands=["start"])
+def start(m):
+    users[str(m.from_user.id)] = {
+        "name": m.from_user.first_name
+    }
+    save(USERS_FILE, users)
+    bot.reply_to(m, "✅ ربات فعال شد")
+
+# ================= CHAT ===================
 @bot.message_handler(content_types=["text"])
-def handle_text(msg):
-    u = user_data(msg.from_user)
-
-    if FORCE_CHANNEL and not u["verified"]:
-        join_required(msg)
+def chat(m):
+    if not is_member(m.from_user.id):
+        bot.reply_to(m, "❌ ابتدا عضو کانال شوید")
         return
 
-    reset_daily_limits(u)
-
-    if msg.text.startswith("/img "):
-        if u["images_today"] >= IMAGE_LIMIT:
-            bot.reply_to(msg, "❌ محدودیت روزانه تصویر تمام شد")
-            return
-        img = image_ai(msg.text[5:])
-        if not img:
-            bot.reply_to(msg, "❌ خطا در تولید تصویر")
-            return
-        u["images_today"] += 1
-        save_db(db)
-        bot.send_photo(msg.chat.id, img)
+    if m.text == "member" and m.from_user.id == ADMIN_ID:
+        txt = f"👥 تعداد اعضا: {len(users)}\n\n"
+        for uid, u in users.items():
+            txt += f"{u['name']} | {uid}\n"
+        bot.send_message(m.chat.id, txt)
         return
 
-    u["history"].append({"role": "user", "content": msg.text})
-    u["history"] = u["history"][-10:]
-
-    reply = chat_ai(u["history"])
-    u["history"].append({"role": "assistant", "content": reply})
-    save_db(db)
-
-    bot.reply_to(msg, reply)
-
-@bot.message_handler(content_types=["voice"])
-def handle_voice(msg):
-    u = user_data(msg.from_user)
-
-    if FORCE_CHANNEL and not u["verified"]:
-        join_required(msg)
-        return
-
-    try:
-        file_info = bot.get_file(msg.voice.file_id)
-        file = requests.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}").content
-
-        r = requests.post(
-            "https://api.openai.com/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            files={"file": ("voice.ogg", file)},
-            data={"model": "whisper-1"}
-        ).json()
-
-        text = r.get("text")
-        if not text:
-            bot.reply_to(msg, "❌ خطا در تبدیل ویس")
+    if m.text.startswith("/image"):
+        if not can_image(m.from_user.id):
+            bot.reply_to(m, "⛔ محدودیت ۵ تصویر در روز")
             return
 
-        u["history"].append({"role": "user", "content": text})
-        reply = chat_ai(u["history"])
-        u["history"].append({"role": "assistant", "content": reply})
-        save_db(db)
+        prompt = m.text.replace("/image", "")
+        img = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1024"
+        )
+        bot.send_photo(m.chat.id, img.data[0].url)
+        return
 
-        bot.reply_to(msg, reply)
-    except:
-        bot.reply_to(msg, "❌ خطا در پردازش ویس")
+    if m.text.startswith("/pdf"):
+        text = m.text.replace("/pdf", "")
+        filename = f"{m.from_user.id}.pdf"
+        c = canvas.Canvas(filename)
+        c.drawString(50, 800, text)
+        c.save()
+        bot.send_document(m.chat.id, open(filename, "rb"))
+        return
 
-# ✅ FIX قطعی 409
-bot.remove_webhook(drop_pending_updates=True)
-time.sleep(2)
+    reply = ai_chat(m.from_user.id, m.text)
+    bot.reply_to(m, reply)
+
+# ================= PDF READ ===============
+@bot.message_handler(content_types=["document"])
+def read_pdf(m):
+    file = bot.download_file(
+        bot.get_file(m.document.file_id).file_path
+    )
+    with open("file.pdf", "wb") as f:
+        f.write(file)
+
+    reader = PdfReader("file.pdf")
+    text = "\n".join(p.extract_text() for p in reader.pages)
+    answer = ai_chat(m.from_user.id, text)
+    bot.reply_to(m, answer)
+
+# ================= RUN ====================
+bot.infinity_polling()
