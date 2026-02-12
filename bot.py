@@ -5,10 +5,6 @@ import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN not set")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
@@ -72,86 +68,83 @@ def download(url, audio=False, quality=None):
 @bot.message_handler(commands=["start"])
 def start(m):
     if not is_member(m.from_user.id):
-        bot.send_message(
-            m.chat.id,
-            "❗ برای استفاده از ربات ابتدا عضو کانال شوید",
-            reply_markup=join_keyboard()
-        )
+        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
         return
-    bot.send_message(
-        m.chat.id,
-        "✅ لینک اینستاگرام، تیک‌تاک، پینترست یا یوتیوب رو بفرست"
-    )
+    bot.send_message(m.chat.id, "لینک اینستاگرام، تیک‌تاک، پینترست یا یوتیوب رو بفرست ✅")
 
 @bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def check_join(c):
     if is_member(c.from_user.id):
-        bot.answer_callback_query(c.id, "✅ عضویت تأیید شد")
-        bot.send_message(c.message.chat.id, "حالا لینک رو بفرست ✅")
+        bot.answer_callback_query(c.id, "✅ تأیید شد")
+        bot.send_message(c.message.chat.id, "حالا لینک رو بفرست")
     else:
         bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("social_"))
 def social_choice(c):
     user_id = c.from_user.id
+    bot.answer_callback_query(c.id, "⏳ در حال پردازش...")
 
     if user_id not in social_wait:
-        bot.answer_callback_query(
-            c.id,
-            "❌ لینک منقضی شده، دوباره لینک بفرست",
-            show_alert=True
-        )
+        bot.send_message(c.message.chat.id, "❌ لینک منقضی شده، دوباره لینک بفرست")
         return
 
-    url = social_wait.pop(user_id)
+    url = social_wait[user_id]
     choice = c.data.split("_")[1]
 
-    if choice in ["video", "both"]:
-        v = download(url)
-        with open(v, "rb") as f:
-            bot.send_video(c.message.chat.id, f)
+    try:
+        if choice in ["video", "both"]:
+            v = download(url)
+            with open(v, "rb") as f:
+                bot.send_video(c.message.chat.id, f)
 
-    if choice in ["audio", "both"]:
-        a = download(url, audio=True)
-        with open(a, "rb") as f:
-            bot.send_audio(c.message.chat.id, f)
+        if choice in ["audio", "both"]:
+            a = download(url, audio=True)
+            with open(a, "rb") as f:
+                bot.send_audio(c.message.chat.id, f)
 
-    bot.answer_callback_query(c.id)
+        social_wait.pop(user_id, None)
+
+    except Exception as e:
+        bot.send_message(
+            c.message.chat.id,
+            "❌ خطا در دانلود، لینک رو دوباره بفرست"
+        )
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
 def yt_choice(c):
     user_id = c.from_user.id
+    bot.answer_callback_query(c.id, "⏳ در حال پردازش...")
 
     if user_id not in yt_wait:
-        bot.answer_callback_query(
-            c.id,
-            "❌ لینک منقضی شده، دوباره لینک یوتیوب بفرست",
-            show_alert=True
-        )
+        bot.send_message(c.message.chat.id, "❌ لینک منقضی شده، دوباره لینک بفرست")
         return
 
-    url = yt_wait.pop(user_id)
+    url = yt_wait[user_id]
     q = c.data.split("_")[1]
 
-    if q == "audio":
-        f = download(url, audio=True)
-        with open(f, "rb") as a:
-            bot.send_audio(c.message.chat.id, a)
-    else:
-        f = download(url, quality=q)
-        with open(f, "rb") as v:
-            bot.send_video(c.message.chat.id, v)
+    try:
+        if q == "audio":
+            f = download(url, audio=True)
+            with open(f, "rb") as a:
+                bot.send_audio(c.message.chat.id, a)
+        else:
+            f = download(url, quality=q)
+            with open(f, "rb") as v:
+                bot.send_video(c.message.chat.id, v)
 
-    bot.answer_callback_query(c.id)
+        yt_wait.pop(user_id, None)
+
+    except Exception:
+        bot.send_message(
+            c.message.chat.id,
+            "❌ خطا در دانلود، دوباره تلاش کن"
+        )
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     if not is_member(m.from_user.id):
-        bot.send_message(
-            m.chat.id,
-            "❗ ابتدا عضو کانال شو",
-            reply_markup=join_keyboard()
-        )
+        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
         return
 
     text = m.text.strip()
@@ -173,7 +166,7 @@ def handle(m):
         kb.add(types.InlineKeyboardButton("🎬 فقط ویدیو", callback_data="social_video"))
         kb.add(types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="social_audio"))
         kb.add(types.InlineKeyboardButton("🎬🎵 ویدیو + آهنگ", callback_data="social_both"))
-        bot.send_message(m.chat.id, "انتخاب کن:", reply_markup=kb)
+        bot.send_message(m.chat.id, "چی می‌خوای؟", reply_markup=kb)
         return
 
     bot.send_message(m.chat.id, "❌ لینک معتبر نیست")
