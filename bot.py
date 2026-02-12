@@ -1,174 +1,86 @@
 import os
 import telebot
-from telebot import types
 import yt_dlp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
-
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-social_wait = {}
-yt_wait = {}
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-def is_member(user_id):
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        m = bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return m.status in ["member", "administrator", "creator"]
-    except:
-        return False
-
-def join_keyboard():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton(
-        "🔗 عضویت در کانال",
-        url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
-    ))
-    kb.add(types.InlineKeyboardButton(
-        "✅ بررسی عضویت",
-        callback_data="check_join"
-    ))
-    return kb
-
-def download(url, audio=False, quality=None):
-    if audio:
-        opts = {
-            "format": "bestaudio/best",
-            "outtmpl": "/tmp/%(title)s.%(ext)s",
-            "postprocessors": [{
+# -------------------------
+# دانلود آهنگ کامل
+# -------------------------
+def download_full_song(query):
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
+        "noplaylist": True,
+        "quiet": True,
+        "postprocessors": [
+            {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192"
-            }],
-            "quiet": True
-        }
-    elif quality:
-        opts = {
-            "format": f"bestvideo[height<={quality}]+bestaudio/best",
-            "outtmpl": "/tmp/%(title)s.%(ext)s",
-            "merge_output_format": "mp4",
-            "quiet": True
-        }
-    else:
-        opts = {
-            "format": "best",
-            "outtmpl": "/tmp/%(title)s.%(ext)s",
-            "quiet": True
-        }
+                "preferredquality": "192",
+            }
+        ],
+    }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        file = ydl.prepare_filename(info)
-        if audio:
-            return file.rsplit(".", 1)[0] + ".mp3"
-        return file
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(
+            f"ytsearch1:{query} official audio full song",
+            download=True
+        )
+        entry = info["entries"][0]
+        filename = ydl.prepare_filename(entry)
+        return filename.rsplit(".", 1)[0] + ".mp3"
 
+# -------------------------
+# استارت
+# -------------------------
 @bot.message_handler(commands=["start"])
-def start(m):
-    if not is_member(m.from_user.id):
-        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
-        return
-    bot.send_message(m.chat.id, "لینک اینستاگرام، تیک‌تاک، پینترست یا یوتیوب رو بفرست ✅")
+def start(msg):
+    bot.send_message(
+        msg.chat.id,
+        "🎵 <b>اسم آهنگ یا اسم خواننده رو بفرست</b>\n\n"
+        "✅ آهنگ کامل MP3 ارسال میشه\n❌ نه تیکه ❌"
+    )
 
-@bot.callback_query_handler(func=lambda c: c.data == "check_join")
-def check_join(c):
-    if is_member(c.from_user.id):
-        bot.answer_callback_query(c.id, "✅ تأیید شد")
-        bot.send_message(c.message.chat.id, "حالا لینک رو بفرست")
-    else:
-        bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
+# -------------------------
+# دریافت متن (اسم آهنگ)
+# -------------------------
+@bot.message_handler(content_types=["text"])
+def handle_song(msg):
+    query = msg.text.strip()
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("social_"))
-def social_choice(c):
-    user_id = c.from_user.id
-    bot.answer_callback_query(c.id, "⏳ در حال پردازش...")
-
-    if user_id not in social_wait:
-        bot.send_message(c.message.chat.id, "❌ لینک منقضی شده، دوباره لینک بفرست")
-        return
-
-    url = social_wait[user_id]
-    choice = c.data.split("_")[1]
+    status = bot.send_message(
+        msg.chat.id,
+        "🔍 در حال پیدا کردن آهنگ کامل..."
+    )
 
     try:
-        if choice in ["video", "both"]:
-            v = download(url)
-            with open(v, "rb") as f:
-                bot.send_video(c.message.chat.id, f)
+        song_path = download_full_song(query)
 
-        if choice in ["audio", "both"]:
-            a = download(url, audio=True)
-            with open(a, "rb") as f:
-                bot.send_audio(c.message.chat.id, f)
+        with open(song_path, "rb") as audio:
+            bot.send_audio(
+                msg.chat.id,
+                audio,
+                caption="✅ <b>آهنگ کامل ارسال شد</b>"
+            )
 
-        social_wait.pop(user_id, None)
+        os.remove(song_path)
 
     except Exception as e:
         bot.send_message(
-            c.message.chat.id,
-            "❌ خطا در دانلود، لینک رو دوباره بفرست"
+            msg.chat.id,
+            f"❌ خطا در دانلود:\n<code>{e}</code>"
         )
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
-def yt_choice(c):
-    user_id = c.from_user.id
-    bot.answer_callback_query(c.id, "⏳ در حال پردازش...")
-
-    if user_id not in yt_wait:
-        bot.send_message(c.message.chat.id, "❌ لینک منقضی شده، دوباره لینک بفرست")
-        return
-
-    url = yt_wait[user_id]
-    q = c.data.split("_")[1]
-
-    try:
-        if q == "audio":
-            f = download(url, audio=True)
-            with open(f, "rb") as a:
-                bot.send_audio(c.message.chat.id, a)
-        else:
-            f = download(url, quality=q)
-            with open(f, "rb") as v:
-                bot.send_video(c.message.chat.id, v)
-
-        yt_wait.pop(user_id, None)
-
-    except Exception:
-        bot.send_message(
-            c.message.chat.id,
-            "❌ خطا در دانلود، دوباره تلاش کن"
-        )
-
-@bot.message_handler(func=lambda m: True)
-def handle(m):
-    if not is_member(m.from_user.id):
-        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
-        return
-
-    text = m.text.strip()
-
-    if "youtube.com" in text or "youtu.be" in text:
-        yt_wait[m.from_user.id] = text
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🎬 360p", callback_data="yt_360"))
-        kb.add(types.InlineKeyboardButton("🎬 480p", callback_data="yt_480"))
-        kb.add(types.InlineKeyboardButton("🎬 720p", callback_data="yt_720"))
-        kb.add(types.InlineKeyboardButton("🎬 1080p", callback_data="yt_1080"))
-        kb.add(types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="yt_audio"))
-        bot.send_message(m.chat.id, "کیفیت رو انتخاب کن:", reply_markup=kb)
-        return
-
-    if any(x in text for x in ["instagram.com", "tiktok.com", "pinterest"]):
-        social_wait[m.from_user.id] = text
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🎬 فقط ویدیو", callback_data="social_video"))
-        kb.add(types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="social_audio"))
-        kb.add(types.InlineKeyboardButton("🎬🎵 ویدیو + آهنگ", callback_data="social_both"))
-        bot.send_message(m.chat.id, "چی می‌خوای؟", reply_markup=kb)
-        return
-
-    bot.send_message(m.chat.id, "❌ لینک معتبر نیست")
-
+# -------------------------
+# اجرا
+# -------------------------
+print("Bot started...")
 bot.infinity_polling()
