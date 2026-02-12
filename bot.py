@@ -8,42 +8,47 @@ GAPGPT_API_KEY = os.getenv("GAPGPT_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 FORCE_CHANNEL = os.getenv("FORCE_CHANNEL")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
-if not os.path.exists("db.json"):
-    with open("db.json","w",encoding="utf-8") as f:
-        json.dump({},f)
+DB_FILE = "db.json"
+
+if not os.path.exists(DB_FILE):
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump({}, f)
 
 def load_db():
-    with open("db.json","r",encoding="utf-8") as f:
+    with open(DB_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def save_db(d):
-    with open("db.json","w",encoding="utf-8") as f:
-        json.dump(d,f,ensure_ascii=False)
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False)
 
 def user_data(u):
     d = load_db()
     uid = str(u.id)
     today = time.strftime("%Y-%m-%d")
+
     if uid not in d:
         d[uid] = {
             "name": u.first_name,
+            "verified": False,
             "images": 0,
             "date": today,
-            "history": [],
-            "verified": False
+            "history": []
         }
+
     if d[uid]["date"] != today:
         d[uid]["images"] = 0
         d[uid]["date"] = today
+
     save_db(d)
     return d[uid]
 
 def member_check(uid):
     try:
         s = bot.get_chat_member(FORCE_CHANNEL, uid).status
-        return s in ("member","administrator","creator")
+        return s in ("member", "administrator", "creator")
     except:
         return False
 
@@ -57,7 +62,7 @@ LOCK_TEXT = (
     "🔒 برای استفاده از ربات:\n\n"
     "1️⃣ عضو کانال شو\n"
     "2️⃣ به آخرین پست کانال ریکشن بزن 👍🔥❤️\n"
-    "3️⃣ سپس روی «بررسی عضویت» بزن"
+    "3️⃣ روی «بررسی عضویت» بزن"
 )
 
 def chat_ai(history):
@@ -91,7 +96,7 @@ def image_ai(prompt):
     url = r.json()["data"][0]["url"]
     img = requests.get(url).content
     name = f"img_{time.time()}.png"
-    open(name,"wb").write(img)
+    open(name, "wb").write(img)
     return name
 
 def pdf_make(text):
@@ -113,13 +118,12 @@ def check_join(c):
     if member_check(c.from_user.id):
         d = load_db()
         uid = str(c.from_user.id)
-        if uid in d:
-            d[uid]["verified"] = True
-            save_db(d)
+        d[uid]["verified"] = True
+        save_db(d)
         bot.answer_callback_query(c.id, "✅ تایید شد")
-        bot.send_message(c.message.chat.id, "✅ تایید شد، الان پیام بفرست")
+        bot.send_message(c.message.chat.id, "✅ تایید شد، پیام بفرست")
     else:
-        bot.answer_callback_query(c.id, "❌ هنوز عضو کانال نیستی", show_alert=True)
+        bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
 
 @bot.message_handler(commands=["start"])
 def start(m):
@@ -136,22 +140,21 @@ def reset_user(m):
     try:
         uid = m.text.split()[1]
         d = load_db()
-        if uid in d:
-            d[uid]["verified"] = False
-            save_db(d)
-            bot.send_message(m.chat.id, "✅ ریست شد")
-        else:
-            bot.send_message(m.chat.id, "❌ پیدا نشد")
+        d[uid]["verified"] = False
+        save_db(d)
+        bot.send_message(m.chat.id, "✅ ریست شد")
     except:
         bot.send_message(m.chat.id, "❌ /reset USER_ID")
 
 @bot.message_handler(content_types=["text"])
-def text(m):
-    d = load_db()
-    u = d.get(str(m.from_user.id))
-    if not u or not u["verified"]:
+def text_handler(m):
+    u = user_data(m.from_user)
+
+    if not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
+
+    d = load_db()
 
     if m.from_user.id == ADMIN_ID and m.text.lower() == "member":
         bot.send_message(m.chat.id, "\n".join([f'{d[i]["name"]} | {i}' for i in d]))
@@ -161,56 +164,58 @@ def text(m):
         if m.from_user.id != ADMIN_ID and u["images"] >= 5:
             bot.send_message(m.chat.id, "❌ سقف امروز پر شده")
             return
-        img = image_ai(m.text.replace("تصویر:","").strip())
+        img = image_ai(m.text.replace("تصویر:", "").strip())
         if m.from_user.id != ADMIN_ID:
             u["images"] += 1
             d[str(m.from_user.id)] = u
             save_db(d)
-        bot.send_photo(m.chat.id, open(img,"rb"))
+        bot.send_photo(m.chat.id, open(img, "rb"))
         os.remove(img)
         return
 
     if m.text.startswith("پی دی اف:"):
-        pdf = pdf_make(m.text.replace("پی دی اف:","").strip())
-        bot.send_document(m.chat.id, open(pdf,"rb"))
+        pdf = pdf_make(m.text.replace("پی دی اف:", "").strip())
+        bot.send_document(m.chat.id, open(pdf, "rb"))
         os.remove(pdf)
         return
 
-    u["history"].append({"role":"user","content":m.text})
+    u["history"].append({"role": "user", "content": m.text})
     ans = chat_ai(u["history"])
-    u["history"].append({"role":"assistant","content":ans})
+    u["history"].append({"role": "assistant", "content": ans})
     d[str(m.from_user.id)] = u
     save_db(d)
     bot.send_message(m.chat.id, ans)
 
 @bot.message_handler(content_types=["voice"])
-def voice(m):
-    d = load_db()
-    u = d.get(str(m.from_user.id))
-    if not u or not u["verified"]:
+def voice_handler(m):
+    u = user_data(m.from_user)
+
+    if not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
+
+    d = load_db()
 
     f = bot.get_file(m.voice.file_id)
     v = bot.download_file(f.file_path)
     name = f"voice_{time.time()}.ogg"
-    open(name,"wb").write(v)
+    open(name, "wb").write(v)
 
     r = requests.post(
         "https://api.gapgpt.app/v1/audio/transcriptions",
         headers={"Authorization": f"Bearer {GAPGPT_API_KEY}"},
-        files={"file": open(name,"rb")},
-        data={"model":"whisper-1"}
+        files={"file": open(name, "rb")},
+        data={"model": "whisper-1"}
     )
 
     text = r.json()["text"]
     os.remove(name)
 
-    u["history"].append({"role":"user","content":text})
+    u["history"].append({"role": "user", "content": text})
     ans = chat_ai(u["history"])
-    u["history"].append({"role":"assistant","content":ans})
+    u["history"].append({"role": "assistant", "content": ans})
     d[str(m.from_user.id)] = u
     save_db(d)
     bot.send_message(m.chat.id, ans)
 
-bot.infinity_polling()
+bot.infinity_polling(skip_pending=True)
