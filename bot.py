@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 import telebot
+from telebot import types
 from openai import OpenAI
 from reportlab.pdfgen import canvas
 from PyPDF2 import PdfReader
@@ -18,7 +19,7 @@ if not BOT_TOKEN or ":" not in BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN is invalid or not set")
 
 # ================= BOT =================
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 client = OpenAI(
     base_url=GAPGPT_BASE_URL,
     api_key=GAPGPT_API_KEY
@@ -48,12 +49,30 @@ limits = load(LIMIT_FILE, {})
 def today():
     return str(datetime.date.today())
 
+# ================= CHANNEL CHECK =======
 def is_member(user_id):
     try:
-        s = bot.get_chat_member(CHANNEL_USERNAME, user_id).status
-        return s in ["member", "administrator", "creator"]
+        status = bot.get_chat_member(CHANNEL_USERNAME, user_id).status
+        return status in ["member", "administrator", "creator"]
     except:
         return False
+
+# ================= JOIN KEYBOARD =======
+def join_keyboard():
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    join_btn = types.InlineKeyboardButton(
+        "📢 عضویت در کانال",
+        url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"
+    )
+
+    check_btn = types.InlineKeyboardButton(
+        "✅ بررسی عضویت",
+        callback_data="check_join"
+    )
+
+    kb.add(join_btn, check_btn)
+    return kb
 
 # ================= MEMORY ==============
 def add_memory(uid, role, text):
@@ -102,13 +121,42 @@ def start(m):
         "name": m.from_user.first_name
     }
     save(USERS_FILE, users)
-    bot.reply_to(m, "✅ ربات فعال شد")
+
+    if not is_member(m.from_user.id):
+        bot.send_message(
+            m.chat.id,
+            "⚠️ برای استفاده از ربات ابتدا عضو کانال شوید:",
+            reply_markup=join_keyboard()
+        )
+        return
+
+    bot.reply_to(m, "✅ ربات فعال شد، خوش اومدی!")
+
+# ================= CALLBACK ============
+@bot.callback_query_handler(func=lambda call: call.data == "check_join")
+def check_join(call):
+    if is_member(call.from_user.id):
+        bot.edit_message_text(
+            "✅ عضویت شما تایید شد\nحالا می‌تونی از ربات استفاده کنی",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        bot.answer_callback_query(
+            call.id,
+            "❌ هنوز عضو کانال نیستی",
+            show_alert=True
+        )
 
 # ================= CHAT ================
 @bot.message_handler(content_types=["text"])
 def chat(m):
     if not is_member(m.from_user.id):
-        bot.reply_to(m, "❌ ابتدا عضو کانال شوید")
+        bot.send_message(
+            m.chat.id,
+            "⛔ برای استفاده از ربات باید عضو کانال باشی:",
+            reply_markup=join_keyboard()
+        )
         return
 
     # ---- ADMIN ----
@@ -153,6 +201,14 @@ def chat(m):
 # ================= PDF READ ============
 @bot.message_handler(content_types=["document"])
 def read_pdf(m):
+    if not is_member(m.from_user.id):
+        bot.send_message(
+            m.chat.id,
+            "⚠️ ابتدا عضو کانال شوید:",
+            reply_markup=join_keyboard()
+        )
+        return
+
     file_info = bot.get_file(m.document.file_id)
     file_bytes = bot.download_file(file_info.file_path)
 
