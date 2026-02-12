@@ -12,6 +12,9 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
+social_wait = {}
+yt_wait = {}
+
 def is_member(user_id):
     if not CHANNEL_USERNAME:
         return True
@@ -23,8 +26,14 @@ def is_member(user_id):
 
 def join_keyboard():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔗 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"))
-    kb.add(types.InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join"))
+    kb.add(types.InlineKeyboardButton(
+        "🔗 عضویت در کانال",
+        url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
+    ))
+    kb.add(types.InlineKeyboardButton(
+        "✅ بررسی عضویت",
+        callback_data="check_join"
+    ))
     return kb
 
 def download(url, audio=False, quality=None):
@@ -55,20 +64,24 @@ def download(url, audio=False, quality=None):
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
+        file = ydl.prepare_filename(info)
         if audio:
-            return filename.rsplit(".", 1)[0] + ".mp3"
-        return filename
-
-social_wait = {}
-yt_wait = {}
+            return file.rsplit(".", 1)[0] + ".mp3"
+        return file
 
 @bot.message_handler(commands=["start"])
 def start(m):
     if not is_member(m.from_user.id):
-        bot.send_message(m.chat.id, "❗ برای استفاده ابتدا عضو کانال شوید", reply_markup=join_keyboard())
+        bot.send_message(
+            m.chat.id,
+            "❗ برای استفاده از ربات ابتدا عضو کانال شوید",
+            reply_markup=join_keyboard()
+        )
         return
-    bot.send_message(m.chat.id, "✅ لینک اینستاگرام، تیک‌تاک، پینترست یا یوتیوب رو بفرست")
+    bot.send_message(
+        m.chat.id,
+        "✅ لینک اینستاگرام، تیک‌تاک، پینترست یا یوتیوب رو بفرست"
+    )
 
 @bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def check_join(c):
@@ -80,7 +93,17 @@ def check_join(c):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("social_"))
 def social_choice(c):
-    url = social_wait.pop(c.from_user.id)
+    user_id = c.from_user.id
+
+    if user_id not in social_wait:
+        bot.answer_callback_query(
+            c.id,
+            "❌ لینک منقضی شده، دوباره لینک بفرست",
+            show_alert=True
+        )
+        return
+
+    url = social_wait.pop(user_id)
     choice = c.data.split("_")[1]
 
     if choice in ["video", "both"]:
@@ -97,7 +120,17 @@ def social_choice(c):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
 def yt_choice(c):
-    url = yt_wait.pop(c.from_user.id)
+    user_id = c.from_user.id
+
+    if user_id not in yt_wait:
+        bot.answer_callback_query(
+            c.id,
+            "❌ لینک منقضی شده، دوباره لینک یوتیوب بفرست",
+            show_alert=True
+        )
+        return
+
+    url = yt_wait.pop(user_id)
     q = c.data.split("_")[1]
 
     if q == "audio":
@@ -114,7 +147,11 @@ def yt_choice(c):
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     if not is_member(m.from_user.id):
-        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
+        bot.send_message(
+            m.chat.id,
+            "❗ ابتدا عضو کانال شو",
+            reply_markup=join_keyboard()
+        )
         return
 
     text = m.text.strip()
