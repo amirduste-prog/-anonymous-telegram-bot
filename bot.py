@@ -3,7 +3,6 @@ import telebot
 from telebot import types
 import yt_dlp
 
-# ========= ENV =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -13,7 +12,6 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ========= MEMBERSHIP =========
 def is_member(user_id):
     if not CHANNEL_USERNAME:
         return True
@@ -25,56 +23,53 @@ def is_member(user_id):
 
 def join_keyboard():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton(
-        "🔗 عضویت در کانال",
-        url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
-    ))
-    kb.add(types.InlineKeyboardButton(
-        "✅ بررسی عضویت",
-        callback_data="check_join"
-    ))
+    kb.add(types.InlineKeyboardButton("🔗 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"))
+    kb.add(types.InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join"))
     return kb
 
-# ========= DOWNLOAD =========
 def download(url, audio=False, quality=None):
     if audio:
-        fmt = "bestaudio/best"
+        opts = {
+            "format": "bestaudio/best",
+            "outtmpl": "/tmp/%(title)s.%(ext)s",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192"
+            }],
+            "quiet": True
+        }
     elif quality:
-        fmt = f"bestvideo[height<={quality}]+bestaudio/best"
+        opts = {
+            "format": f"bestvideo[height<={quality}]+bestaudio/best",
+            "outtmpl": "/tmp/%(title)s.%(ext)s",
+            "merge_output_format": "mp4",
+            "quiet": True
+        }
     else:
-        fmt = "best"
-
-    opts = {
-        "format": fmt,
-        "outtmpl": "/tmp/%(title)s.%(ext)s",
-        "quiet": True
-    }
+        opts = {
+            "format": "best",
+            "outtmpl": "/tmp/%(title)s.%(ext)s",
+            "quiet": True
+        }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
+        filename = ydl.prepare_filename(info)
+        if audio:
+            return filename.rsplit(".", 1)[0] + ".mp3"
+        return filename
 
-# ========= STATES =========
 social_wait = {}
 yt_wait = {}
 
-# ========= START =========
 @bot.message_handler(commands=["start"])
 def start(m):
     if not is_member(m.from_user.id):
-        bot.send_message(
-            m.chat.id,
-            "❗ برای استفاده ابتدا عضو کانال شوید",
-            reply_markup=join_keyboard()
-        )
+        bot.send_message(m.chat.id, "❗ برای استفاده ابتدا عضو کانال شوید", reply_markup=join_keyboard())
         return
+    bot.send_message(m.chat.id, "✅ لینک اینستاگرام، تیک‌تاک، پینترست یا یوتیوب رو بفرست")
 
-    bot.send_message(
-        m.chat.id,
-        "✅ لینک اینستا، تیک‌تاک، پینترست یا یوتیوب رو بفرست"
-    )
-
-# ========= JOIN CHECK =========
 @bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def check_join(c):
     if is_member(c.from_user.id):
@@ -83,11 +78,10 @@ def check_join(c):
     else:
         bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
 
-# ========= SOCIAL CALLBACK =========
 @bot.callback_query_handler(func=lambda c: c.data.startswith("social_"))
 def social_choice(c):
-    choice = c.data.split("_")[1]
     url = social_wait.pop(c.from_user.id)
+    choice = c.data.split("_")[1]
 
     if choice in ["video", "both"]:
         v = download(url)
@@ -101,11 +95,10 @@ def social_choice(c):
 
     bot.answer_callback_query(c.id)
 
-# ========= YOUTUBE CALLBACK =========
 @bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
 def yt_choice(c):
-    q = c.data.split("_")[1]
     url = yt_wait.pop(c.from_user.id)
+    q = c.data.split("_")[1]
 
     if q == "audio":
         f = download(url, audio=True)
@@ -118,7 +111,6 @@ def yt_choice(c):
 
     bot.answer_callback_query(c.id)
 
-# ========= MESSAGE =========
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     if not is_member(m.from_user.id):
@@ -127,33 +119,26 @@ def handle(m):
 
     text = m.text.strip()
 
-    # YouTube
     if "youtube.com" in text or "youtu.be" in text:
         yt_wait[m.from_user.id] = text
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            types.InlineKeyboardButton("🎬 360p", callback_data="yt_360"),
-            types.InlineKeyboardButton("🎬 480p", callback_data="yt_480"),
-            types.InlineKeyboardButton("🎬 720p", callback_data="yt_720"),
-            types.InlineKeyboardButton("🎬 1080p", callback_data="yt_1080"),
-            types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="yt_audio")
-        )
-        bot.send_message(m.chat.id, "کیفیت موردنظر رو انتخاب کن:", reply_markup=kb)
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🎬 360p", callback_data="yt_360"))
+        kb.add(types.InlineKeyboardButton("🎬 480p", callback_data="yt_480"))
+        kb.add(types.InlineKeyboardButton("🎬 720p", callback_data="yt_720"))
+        kb.add(types.InlineKeyboardButton("🎬 1080p", callback_data="yt_1080"))
+        kb.add(types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="yt_audio"))
+        bot.send_message(m.chat.id, "کیفیت رو انتخاب کن:", reply_markup=kb)
         return
 
-    # Instagram / TikTok / Pinterest
     if any(x in text for x in ["instagram.com", "tiktok.com", "pinterest"]):
         social_wait[m.from_user.id] = text
         kb = types.InlineKeyboardMarkup()
-        kb.add(
-            types.InlineKeyboardButton("🎬 فقط ویدیو", callback_data="social_video"),
-            types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="social_audio"),
-            types.InlineKeyboardButton("🎬🎵 ویدیو + آهنگ", callback_data="social_both")
-        )
-        bot.send_message(m.chat.id, "چی می‌خوای؟", reply_markup=kb)
+        kb.add(types.InlineKeyboardButton("🎬 فقط ویدیو", callback_data="social_video"))
+        kb.add(types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="social_audio"))
+        kb.add(types.InlineKeyboardButton("🎬🎵 ویدیو + آهنگ", callback_data="social_both"))
+        bot.send_message(m.chat.id, "انتخاب کن:", reply_markup=kb)
         return
 
     bot.send_message(m.chat.id, "❌ لینک معتبر نیست")
 
-# ========= RUN =========
 bot.infinity_polling()
