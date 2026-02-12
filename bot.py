@@ -9,46 +9,32 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 FORCE_CHANNEL = os.getenv("FORCE_CHANNEL")
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
-
 DB_FILE = "db.json"
 
 if not os.path.exists(DB_FILE):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump({}, f)
+    open(DB_FILE, "w", encoding="utf-8").write("{}")
 
 def load_db():
-    with open(DB_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return json.load(open(DB_FILE, "r", encoding="utf-8"))
 
 def save_db(d):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False)
+    json.dump(d, open(DB_FILE, "w", encoding="utf-8"), ensure_ascii=False)
 
 def user_data(u):
     d = load_db()
     uid = str(u.id)
     today = time.strftime("%Y-%m-%d")
-
     if uid not in d:
-        d[uid] = {
-            "name": u.first_name,
-            "verified": False,
-            "images": 0,
-            "date": today,
-            "history": []
-        }
-
+        d[uid] = {"name": u.first_name, "verified": False, "images": 0, "date": today, "history": []}
     if d[uid]["date"] != today:
         d[uid]["images"] = 0
         d[uid]["date"] = today
-
     save_db(d)
     return d[uid]
 
 def member_check(uid):
     try:
-        s = bot.get_chat_member(FORCE_CHANNEL, uid).status
-        return s in ("member", "administrator", "creator")
+        return bot.get_chat_member(FORCE_CHANNEL, uid).status in ("member", "administrator", "creator")
     except:
         return False
 
@@ -58,46 +44,41 @@ def join_markup():
     k.add(InlineKeyboardButton("✅ بررسی عضویت", callback_data="check"))
     return k
 
-LOCK_TEXT = (
-    "🔒 برای استفاده از ربات:\n\n"
-    "1️⃣ عضو کانال شو\n"
-    "2️⃣ به آخرین پست کانال ریکشن بزن 👍🔥❤️\n"
-    "3️⃣ روی «بررسی عضویت» بزن"
-)
+LOCK_TEXT = "🔒 ابتدا عضو کانال شو و سپس روی «بررسی عضویت» بزن"
 
 def chat_ai(history):
-    r = requests.post(
-        "https://api.gapgpt.app/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {GAPGPT_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "gpt-5.2",
-            "messages": history[-10:]
-        },
-        timeout=120
-    )
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        r = requests.post(
+            "https://api.gapgpt.app/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GAPGPT_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "gpt-5.2", "messages": history[-10:]},
+            timeout=120
+        )
+        j = r.json()
+        if "choices" not in j:
+            return "❌ خطا از سمت سرور هوش مصنوعی"
+        return j["choices"][0]["message"]["content"]
+    except:
+        return "❌ خطای داخلی، دوباره تلاش کن"
 
 def image_ai(prompt):
-    r = requests.post(
-        "https://api.gapgpt.app/v1/images/generations",
-        headers={
-            "Authorization": f"Bearer {GAPGPT_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "gpt-image-1",
-            "prompt": prompt,
-            "size": "1024x1024"
-        }
-    )
-    url = r.json()["data"][0]["url"]
-    img = requests.get(url).content
-    name = f"img_{time.time()}.png"
-    open(name, "wb").write(img)
-    return name
+    try:
+        r = requests.post(
+            "https://api.gapgpt.app/v1/images/generations",
+            headers={"Authorization": f"Bearer {GAPGPT_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "gpt-image-1", "prompt": prompt, "size": "1024x1024"},
+            timeout=120
+        )
+        j = r.json()
+        if "data" not in j:
+            return None
+        url = j["data"][0]["url"]
+        img = requests.get(url).content
+        name = f"img_{time.time()}.png"
+        open(name, "wb").write(img)
+        return name
+    except:
+        return None
 
 def pdf_make(text):
     name = f"pdf_{time.time()}.pdf"
@@ -117,13 +98,12 @@ def pdf_make(text):
 def check_join(c):
     if member_check(c.from_user.id):
         d = load_db()
-        uid = str(c.from_user.id)
-        d[uid]["verified"] = True
+        d[str(c.from_user.id)]["verified"] = True
         save_db(d)
         bot.answer_callback_query(c.id, "✅ تایید شد")
         bot.send_message(c.message.chat.id, "✅ تایید شد، پیام بفرست")
     else:
-        bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
+        bot.answer_callback_query(c.id, "❌ عضو کانال نیستی", show_alert=True)
 
 @bot.message_handler(commands=["start"])
 def start(m):
@@ -144,27 +124,24 @@ def reset_user(m):
         save_db(d)
         bot.send_message(m.chat.id, "✅ ریست شد")
     except:
-        bot.send_message(m.chat.id, "❌ /reset USER_ID")
+        bot.send_message(m.chat.id, "/reset USER_ID")
 
 @bot.message_handler(content_types=["text"])
 def text_handler(m):
     u = user_data(m.from_user)
-
     if not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
-
     d = load_db()
-
-    if m.from_user.id == ADMIN_ID and m.text.lower() == "member":
-        bot.send_message(m.chat.id, "\n".join([f'{d[i]["name"]} | {i}' for i in d]))
-        return
 
     if m.text.startswith("تصویر:"):
         if m.from_user.id != ADMIN_ID and u["images"] >= 5:
             bot.send_message(m.chat.id, "❌ سقف امروز پر شده")
             return
         img = image_ai(m.text.replace("تصویر:", "").strip())
+        if not img:
+            bot.send_message(m.chat.id, "❌ خطا در ساخت تصویر")
+            return
         if m.from_user.id != ADMIN_ID:
             u["images"] += 1
             d[str(m.from_user.id)] = u
@@ -189,27 +166,31 @@ def text_handler(m):
 @bot.message_handler(content_types=["voice"])
 def voice_handler(m):
     u = user_data(m.from_user)
-
     if not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
-
     d = load_db()
-
     f = bot.get_file(m.voice.file_id)
     v = bot.download_file(f.file_path)
     name = f"voice_{time.time()}.ogg"
     open(name, "wb").write(v)
 
-    r = requests.post(
-        "https://api.gapgpt.app/v1/audio/transcriptions",
-        headers={"Authorization": f"Bearer {GAPGPT_API_KEY}"},
-        files={"file": open(name, "rb")},
-        data={"model": "whisper-1"}
-    )
+    try:
+        r = requests.post(
+            "https://api.gapgpt.app/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GAPGPT_API_KEY}"},
+            files={"file": open(name, "rb")},
+            data={"model": "whisper-1"}
+        )
+        text = r.json().get("text")
+    except:
+        text = None
 
-    text = r.json()["text"]
     os.remove(name)
+
+    if not text:
+        bot.send_message(m.chat.id, "❌ خطا در تبدیل ویس")
+        return
 
     u["history"].append({"role": "user", "content": text})
     ans = chat_ai(u["history"])
