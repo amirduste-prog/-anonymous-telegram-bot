@@ -13,6 +13,15 @@ social_wait = {}
 yt_wait = {}
 
 # =========================
+# ✅ Instagram Cookies
+# =========================
+IG_COOKIE_FILE = "/tmp/ig.txt"
+
+if os.getenv("IG_COOKIES"):
+    with open(IG_COOKIE_FILE, "w", encoding="utf-8") as f:
+        f.write(os.getenv("IG_COOKIES"))
+
+# =========================
 # عضویت
 # =========================
 def is_member(uid):
@@ -37,7 +46,7 @@ def join_keyboard():
     return kb
 
 # =========================
-# 🔍 سرچ نسخه کامل (FIXED)
+# 🔍 سرچ آهنگ کامل
 # =========================
 def search_full_youtube(query):
     opts = {
@@ -71,37 +80,45 @@ def search_full_youtube(query):
     return f"https://www.youtube.com/watch?v={best['id']}"
 
 # =========================
-# دانلود
+# ⬇️ Downloaders
 # =========================
-def download_audio(url):
+def base_opts(extra=None):
     opts = {
-        "format": "bestaudio/best",
-        "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
         "quiet": True,
+        "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
+    }
+    if extra:
+        opts.update(extra)
+    return opts
+
+def download_audio(url, instagram=False):
+    opts = base_opts({
+        "format": "bestaudio/best",
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
             "preferredquality": "192"
         }]
-    }
+    })
+
+    if instagram and os.path.exists(IG_COOKIE_FILE):
+        opts["cookiefile"] = IG_COOKIE_FILE
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         f = ydl.prepare_filename(info)
         return f.rsplit(".", 1)[0] + ".mp3"
 
-def download_video(url, quality=None):
-    if quality:
-        fmt = f"bestvideo[height<={quality}]+bestaudio/best"
-    else:
-        fmt = "bestvideo+bestaudio/best"
+def download_video(url, quality=None, instagram=False):
+    fmt = f"bestvideo[height<={quality}]+bestaudio/best" if quality else "bestvideo+bestaudio/best"
 
-    opts = {
+    opts = base_opts({
         "format": fmt,
-        "merge_output_format": "mp4",
-        "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
-        "quiet": True
-    }
+        "merge_output_format": "mp4"
+    })
+
+    if instagram and os.path.exists(IG_COOKIE_FILE):
+        opts["cookiefile"] = IG_COOKIE_FILE
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -115,11 +132,7 @@ def start(m):
     if not is_member(m.from_user.id):
         bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
         return
-    bot.send_message(
-        m.chat.id,
-        "✅ لینک بفرست\n"
-        "🎵 یا اسم آهنگ / خواننده (نسخه کامل)"
-    )
+    bot.send_message(m.chat.id, "✅ لینک بفرست یا اسم آهنگ")
 
 @bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def check_join(c):
@@ -130,7 +143,7 @@ def check_join(c):
         bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
 
 # =========================
-# یوتیوب
+# Callbacks
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
 def yt_choice(c):
@@ -154,9 +167,6 @@ def yt_choice(c):
     except:
         bot.send_message(c.message.chat.id, "❌ خطا در دانلود")
 
-# =========================
-# شبکه‌های اجتماعی
-# =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("social_"))
 def social_choice(c):
     uid = c.from_user.id
@@ -168,16 +178,20 @@ def social_choice(c):
 
     url = social_wait.pop(uid)
     ch = c.data.split("_")[1]
+    is_ig = "instagram.com" in url
 
     try:
         if ch in ["video", "both"]:
-            v = download_video(url)
+            v = download_video(url, instagram=is_ig)
             bot.send_video(c.message.chat.id, open(v, "rb"))
         if ch in ["audio", "both"]:
-            a = download_audio(url)
+            a = download_audio(url, instagram=is_ig)
             bot.send_audio(c.message.chat.id, open(a, "rb"))
     except:
-        bot.send_message(c.message.chat.id, "❌ خطا")
+        bot.send_message(
+            c.message.chat.id,
+            "❌ دانلود این لینک نیاز به لاگین اینستاگرام دارد"
+        )
 
 # =========================
 # MESSAGE
@@ -190,7 +204,6 @@ def handle(m):
 
     text = m.text.strip()
 
-    # یوتیوب
     if "youtube.com" in text or "youtu.be" in text:
         yt_wait[m.from_user.id] = text
         kb = types.InlineKeyboardMarkup()
@@ -200,7 +213,6 @@ def handle(m):
         bot.send_message(m.chat.id, "کیفیت رو انتخاب کن:", reply_markup=kb)
         return
 
-    # اینستاگرام / تیک‌تاک / پینترست
     if any(x in text for x in ["instagram.com", "tiktok.com", "pinterest"]):
         social_wait[m.from_user.id] = text
         kb = types.InlineKeyboardMarkup()
@@ -210,17 +222,12 @@ def handle(m):
         bot.send_message(m.chat.id, "انتخاب کن:", reply_markup=kb)
         return
 
-    # 🔍 اسم آهنگ
     bot.send_message(m.chat.id, "🔍 در حال پیدا کردن نسخه کامل...")
 
     try:
         url = search_full_youtube(text)
         song = download_audio(url)
-        bot.send_audio(
-            m.chat.id,
-            open(song, "rb"),
-            caption="✅ آهنگ کامل"
-        )
+        bot.send_audio(m.chat.id, open(song, "rb"), caption="✅ آهنگ کامل")
     except:
         bot.send_message(m.chat.id, "❌ نسخه کامل پیدا نشد")
 
