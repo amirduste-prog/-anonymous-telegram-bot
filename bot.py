@@ -1,8 +1,4 @@
-import telebot
-import requests
-import os
-import json
-import time
+import telebot, requests, os, json, time
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -35,7 +31,8 @@ def user_data(u):
             "name": u.first_name,
             "images": 0,
             "date": today,
-            "history": []
+            "history": [],
+            "verified": False
         }
     if d[uid]["date"] != today:
         d[uid]["images"] = 0
@@ -46,30 +43,20 @@ def user_data(u):
 def member_check(uid):
     try:
         s = bot.get_chat_member(FORCE_CHANNEL, uid).status
-        return s in ["member","administrator","creator"]
+        return s in ("member","administrator","creator")
     except:
         return False
 
 def join_markup():
     k = InlineKeyboardMarkup()
-    k.add(
-        InlineKeyboardButton(
-            "📢 عضویت در کانال",
-            url=f"https://t.me/{FORCE_CHANNEL.replace('@','')}"
-        )
-    )
-    k.add(
-        InlineKeyboardButton(
-            "✅ بررسی عضویت",
-            callback_data="check"
-        )
-    )
+    k.add(InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{FORCE_CHANNEL.replace('@','')}"))
+    k.add(InlineKeyboardButton("✅ بررسی عضویت", callback_data="check"))
     return k
 
 LOCK_TEXT = (
     "🔒 برای استفاده از ربات:\n\n"
     "1️⃣ عضو کانال شو\n"
-    "2️⃣ به آخرین پست کانال یک ریکشن بزن 👍🔥❤️\n"
+    "2️⃣ به آخرین پست کانال ریکشن بزن 👍🔥❤️\n"
     "3️⃣ سپس روی «بررسی عضویت» بزن"
 )
 
@@ -124,50 +111,60 @@ def pdf_make(text):
 @bot.callback_query_handler(func=lambda c: c.data == "check")
 def check_join(c):
     if member_check(c.from_user.id):
+        d = load_db()
+        uid = str(c.from_user.id)
+        if uid in d:
+            d[uid]["verified"] = True
+            save_db(d)
         bot.answer_callback_query(c.id, "✅ تایید شد")
-        bot.send_message(
-            c.message.chat.id,
-            "✅ عضویت تایید شد\nمی‌تونی از ربات استفاده کنی"
-        )
+        bot.send_message(c.message.chat.id, "✅ تایید شد، الان پیام بفرست")
     else:
-        bot.answer_callback_query(
-            c.id,
-            "❌ هنوز عضو کانال نیستی",
-            show_alert=True
-        )
+        bot.answer_callback_query(c.id, "❌ هنوز عضو کانال نیستی", show_alert=True)
 
 @bot.message_handler(commands=["start"])
 def start(m):
-    user_data(m.from_user)
-    if not member_check(m.from_user.id):
+    u = user_data(m.from_user)
+    if not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
     bot.send_message(m.chat.id, "✅ ربات آماده است")
 
+@bot.message_handler(commands=["reset"])
+def reset_user(m):
+    if m.from_user.id != ADMIN_ID:
+        return
+    try:
+        uid = m.text.split()[1]
+        d = load_db()
+        if uid in d:
+            d[uid]["verified"] = False
+            save_db(d)
+            bot.send_message(m.chat.id, "✅ ریست شد")
+        else:
+            bot.send_message(m.chat.id, "❌ پیدا نشد")
+    except:
+        bot.send_message(m.chat.id, "❌ /reset USER_ID")
+
 @bot.message_handler(content_types=["text"])
 def text(m):
-    if not member_check(m.from_user.id):
+    d = load_db()
+    u = d.get(str(m.from_user.id))
+    if not u or not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
 
-    u = user_data(m.from_user)
-
     if m.from_user.id == ADMIN_ID and m.text.lower() == "member":
-        d = load_db()
-        bot.send_message(
-            m.chat.id,
-            "\n".join([f'{d[i]["name"]} | {i}' for i in d])
-        )
+        bot.send_message(m.chat.id, "\n".join([f'{d[i]["name"]} | {i}' for i in d]))
         return
 
     if m.text.startswith("تصویر:"):
         if m.from_user.id != ADMIN_ID and u["images"] >= 5:
-            bot.send_message(m.chat.id, "❌ سقف تصاویر امروز پر شده")
+            bot.send_message(m.chat.id, "❌ سقف امروز پر شده")
             return
         img = image_ai(m.text.replace("تصویر:","").strip())
         if m.from_user.id != ADMIN_ID:
-            d = load_db()
-            d[str(m.from_user.id)]["images"] += 1
+            u["images"] += 1
+            d[str(m.from_user.id)] = u
             save_db(d)
         bot.send_photo(m.chat.id, open(img,"rb"))
         os.remove(img)
@@ -182,16 +179,15 @@ def text(m):
     u["history"].append({"role":"user","content":m.text})
     ans = chat_ai(u["history"])
     u["history"].append({"role":"assistant","content":ans})
-
-    d = load_db()
     d[str(m.from_user.id)] = u
     save_db(d)
-
     bot.send_message(m.chat.id, ans)
 
 @bot.message_handler(content_types=["voice"])
 def voice(m):
-    if not member_check(m.from_user.id):
+    d = load_db()
+    u = d.get(str(m.from_user.id))
+    if not u or not u["verified"]:
         bot.send_message(m.chat.id, LOCK_TEXT, reply_markup=join_markup())
         return
 
@@ -210,15 +206,11 @@ def voice(m):
     text = r.json()["text"]
     os.remove(name)
 
-    u = user_data(m.from_user)
     u["history"].append({"role":"user","content":text})
     ans = chat_ai(u["history"])
     u["history"].append({"role":"assistant","content":ans})
-
-    d = load_db()
     d[str(m.from_user.id)] = u
     save_db(d)
-
     bot.send_message(m.chat.id, ans)
 
 bot.infinity_polling()
