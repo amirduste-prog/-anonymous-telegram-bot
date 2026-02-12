@@ -1,31 +1,35 @@
+import os
+import json
+import datetime
 import telebot
-import os, json, datetime
-from telebot import types
 from openai import OpenAI
 from reportlab.pdfgen import canvas
 from PyPDF2 import PdfReader
 
-# ================= CONFIG =================
-BOT_TOKEN = "TELEGRAM_BOT_TOKEN"
-ADMIN_ID = 123456789
-CHANNEL_USERNAME = "@your_channel"
+# ================= ENV =================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GAPGPT_API_KEY = os.getenv("GAPGPT_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 
-GAPGPT_API_KEY = "YOUR_GAPGPT_API_KEY"
 GAPGPT_BASE_URL = "https://api.gapgpt.app/v1"
 
-# ================= BOT ====================
+if not BOT_TOKEN or ":" not in BOT_TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN is invalid or not set")
+
+# ================= BOT =================
 bot = telebot.TeleBot(BOT_TOKEN)
 client = OpenAI(
     base_url=GAPGPT_BASE_URL,
     api_key=GAPGPT_API_KEY
 )
 
-# ================= FILES ==================
+# ================= FILES ===============
 USERS_FILE = "users.json"
 MEMORY_FILE = "memory.json"
 LIMIT_FILE = "daily_limit.json"
 
-# ================= UTILS ==================
+# ================= UTILS ===============
 def load(file, default):
     if not os.path.exists(file):
         with open(file, "w", encoding="utf-8") as f:
@@ -51,7 +55,7 @@ def is_member(user_id):
     except:
         return False
 
-# ================= MEMORY =================
+# ================= MEMORY ==============
 def add_memory(uid, role, text):
     uid = str(uid)
     memory.setdefault(uid, [])
@@ -59,7 +63,7 @@ def add_memory(uid, role, text):
     memory[uid] = memory[uid][-10:]
     save(MEMORY_FILE, memory)
 
-# ================= AI CHAT ================
+# ================= AI CHAT =============
 def ai_chat(user_id, text):
     uid = str(user_id)
     msgs = memory.get(uid, [])
@@ -75,7 +79,7 @@ def ai_chat(user_id, text):
     add_memory(user_id, "assistant", answer)
     return answer
 
-# ================= IMAGE LIMIT ============
+# ================= IMAGE LIMIT =========
 def can_image(user_id):
     if user_id == ADMIN_ID:
         return True
@@ -91,7 +95,7 @@ def can_image(user_id):
     save(LIMIT_FILE, limits)
     return True
 
-# ================= START ==================
+# ================= START ===============
 @bot.message_handler(commands=["start"])
 def start(m):
     users[str(m.from_user.id)] = {
@@ -100,13 +104,14 @@ def start(m):
     save(USERS_FILE, users)
     bot.reply_to(m, "✅ ربات فعال شد")
 
-# ================= CHAT ===================
+# ================= CHAT ================
 @bot.message_handler(content_types=["text"])
 def chat(m):
     if not is_member(m.from_user.id):
         bot.reply_to(m, "❌ ابتدا عضو کانال شوید")
         return
 
+    # ---- ADMIN ----
     if m.text == "member" and m.from_user.id == ADMIN_ID:
         txt = f"👥 تعداد اعضا: {len(users)}\n\n"
         for uid, u in users.items():
@@ -114,12 +119,13 @@ def chat(m):
         bot.send_message(m.chat.id, txt)
         return
 
+    # ---- IMAGE ----
     if m.text.startswith("/image"):
         if not can_image(m.from_user.id):
             bot.reply_to(m, "⛔ محدودیت ۵ تصویر در روز")
             return
 
-        prompt = m.text.replace("/image", "")
+        prompt = m.text.replace("/image", "").strip()
         img = client.images.generate(
             model="gpt-image-1",
             prompt=prompt,
@@ -128,31 +134,37 @@ def chat(m):
         bot.send_photo(m.chat.id, img.data[0].url)
         return
 
+    # ---- PDF CREATE ----
     if m.text.startswith("/pdf"):
-        text = m.text.replace("/pdf", "")
+        text = m.text.replace("/pdf", "").strip()
         filename = f"{m.from_user.id}.pdf"
+
         c = canvas.Canvas(filename)
-        c.drawString(50, 800, text)
+        c.drawString(40, 800, text)
         c.save()
+
         bot.send_document(m.chat.id, open(filename, "rb"))
         return
 
+    # ---- NORMAL CHAT ----
     reply = ai_chat(m.from_user.id, m.text)
     bot.reply_to(m, reply)
 
-# ================= PDF READ ===============
+# ================= PDF READ ============
 @bot.message_handler(content_types=["document"])
 def read_pdf(m):
-    file = bot.download_file(
-        bot.get_file(m.document.file_id).file_path
-    )
-    with open("file.pdf", "wb") as f:
-        f.write(file)
+    file_info = bot.get_file(m.document.file_id)
+    file_bytes = bot.download_file(file_info.file_path)
 
-    reader = PdfReader("file.pdf")
-    text = "\n".join(p.extract_text() for p in reader.pages)
+    with open("input.pdf", "wb") as f:
+        f.write(file_bytes)
+
+    reader = PdfReader("input.pdf")
+    text = "\n".join(p.extract_text() or "" for p in reader.pages)
+
     answer = ai_chat(m.from_user.id, text)
     bot.reply_to(m, answer)
 
-# ================= RUN ====================
+# ================= RUN =================
+print("✅ Bot is running...")
 bot.infinity_polling()
