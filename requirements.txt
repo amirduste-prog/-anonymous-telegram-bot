@@ -1,5 +1,3 @@
-pyTelegramBotAPI==4.15.4
+pyTelegramBotAPI
 requests
-pillow
-PyPDF2
 reportlab
