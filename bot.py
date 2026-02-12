@@ -4,35 +4,34 @@ import os
 import json
 import time
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+GAPGPT_API_KEY = os.getenv("GAPGPT_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+FORCE_CHANNEL = os.getenv("FORCE_CHANNEL")
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 if not os.path.exists("db.json"):
-    with open("db.json","w") as f:
+    with open("db.json","w",encoding="utf-8") as f:
         json.dump({},f)
 
 def load_db():
-    return json.load(open("db.json","r"))
+    with open("db.json","r",encoding="utf-8") as f:
+        return json.load(f)
 
 def save_db(d):
-    json.dump(d,open("db.json","w"),ensure_ascii=False)
+    with open("db.json","w",encoding="utf-8") as f:
+        json.dump(d,f,ensure_ascii=False)
 
 def user_data(u):
     d = load_db()
     uid = str(u.id)
     today = time.strftime("%Y-%m-%d")
     if uid not in d:
-        d[uid] = {
-            "name": u.first_name,
-            "images": 0,
-            "date": today,
-            "history": []
-        }
+        d[uid] = {"name":u.first_name,"images":0,"date":today,"history":[]}
     if d[uid]["date"] != today:
         d[uid]["images"] = 0
         d[uid]["date"] = today
@@ -41,7 +40,7 @@ def user_data(u):
 
 def member_check(uid):
     try:
-        s = bot.get_chat_member(FORCE_CHANNEL, uid).status
+        s = bot.get_chat_member(FORCE_CHANNEL,uid).status
         return s in ["member","administrator","creator"]
     except:
         return False
@@ -55,8 +54,14 @@ def join_markup():
 def chat_ai(history):
     r = requests.post(
         "https://api.gapgpt.app/v1/chat/completions",
-        headers={"Authorization":f"Bearer {GAPGPT_API_KEY}","Content-Type":"application/json"},
-        json={"model":"gpt-5.2","messages":history},
+        headers={
+            "Authorization":f"Bearer {GAPGPT_API_KEY}",
+            "Content-Type":"application/json"
+        },
+        json={
+            "model":"gpt-5.2",
+            "messages":history[-10:]
+        },
         timeout=120
     )
     return r.json()["choices"][0]["message"]["content"]
@@ -64,8 +69,15 @@ def chat_ai(history):
 def image_ai(prompt):
     r = requests.post(
         "https://api.gapgpt.app/v1/images/generations",
-        headers={"Authorization":f"Bearer {GAPGPT_API_KEY}","Content-Type":"application/json"},
-        json={"model":"gpt-image-1","prompt":prompt,"size":"1024x1024"}
+        headers={
+            "Authorization":f"Bearer {GAPGPT_API_KEY}",
+            "Content-Type":"application/json"
+        },
+        json={
+            "model":"gpt-image-1",
+            "prompt":prompt,
+            "size":"1024x1024"
+        }
     )
     url = r.json()["data"][0]["url"]
     img = requests.get(url).content
@@ -131,7 +143,7 @@ def text(m):
         os.remove(pdf)
         return
     u["history"].append({"role":"user","content":m.text})
-    ans = chat_ai(u["history"][-10:])
+    ans = chat_ai(u["history"])
     u["history"].append({"role":"assistant","content":ans})
     d = load_db()
     d[str(m.from_user.id)] = u
@@ -157,7 +169,7 @@ def voice(m):
     os.remove(name)
     u = user_data(m.from_user)
     u["history"].append({"role":"user","content":text})
-    ans = chat_ai(u["history"][-10:])
+    ans = chat_ai(u["history"])
     u["history"].append({"role":"assistant","content":ans})
     d = load_db()
     d[str(m.from_user.id)] = u
