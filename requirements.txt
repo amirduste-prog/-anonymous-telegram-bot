@@ -1,7 +1,4 @@
- pyTelegramBotAPI 
-openai 
-requests 
-pillow 
-PyPDF2 
-reportlab
-replace
+pyTelegramBotAPI
+yt-dlp
+requests
+
