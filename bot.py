@@ -25,52 +25,15 @@ def is_member(user_id):
 
 def join_keyboard():
     kb = types.InlineKeyboardMarkup()
-    if CHANNEL_USERNAME:
-        kb.add(types.InlineKeyboardButton(
-            "🔗 عضویت در کانال",
-            url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
-        ))
+    kb.add(types.InlineKeyboardButton(
+        "🔗 عضویت در کانال",
+        url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
+    ))
     kb.add(types.InlineKeyboardButton(
         "✅ بررسی عضویت",
         callback_data="check_join"
     ))
     return kb
-
-# ========= START =========
-@bot.message_handler(commands=["start"])
-def start(m):
-    if not is_member(m.from_user.id):
-        bot.send_message(
-            m.chat.id,
-            "❗ برای استفاده ابتدا عضو کانال شوید",
-            reply_markup=join_keyboard()
-        )
-        return
-
-    bot.send_message(
-        m.chat.id,
-        "✅ لینک اینستا، تیک‌تاک، پینترست یا یوتیوب رو بفرست"
-    )
-
-# ========= CALLBACK JOIN =========
-@bot.callback_query_handler(func=lambda c: c.data == "check_join")
-def check_join(c):
-    if is_member(c.from_user.id):
-        bot.answer_callback_query(c.id, "✅ عضویت تأیید شد")
-        bot.send_message(c.message.chat.id, "حالا لینک رو بفرست ✅")
-    else:
-        bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
-
-# ========= ADMIN =========
-@bot.message_handler(commands=["member"])
-def member_cmd(m):
-    if m.from_user.id != ADMIN_ID:
-        return
-    try:
-        count = bot.get_chat(CHANNEL_USERNAME).get_member_count()
-        bot.send_message(m.chat.id, f"👥 تعداد اعضا: {count}")
-    except Exception as e:
-        bot.send_message(m.chat.id, str(e))
 
 # ========= DOWNLOAD =========
 def download(url, audio=False, quality=None):
@@ -91,14 +54,106 @@ def download(url, audio=False, quality=None):
         info = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(info)
 
-# ========= YOUTUBE STATE =========
+# ========= STATES =========
+social_wait = {}
 yt_wait = {}
 
-# ========= CALLBACK QUALITY =========
+# ========= START =========
+@bot.message_handler(commands=["start"])
+def start(m):
+    if not is_member(m.from_user.id):
+        bot.send_message(
+            m.chat.id,
+            "❗ برای استفاده ابتدا عضو کانال شوید",
+            reply_markup=join_keyboard()
+        )
+        return
+
+    bot.send_message(
+        m.chat.id,
+        "✅ لینک اینستا، تیک‌تاک، پینترست یا یوتیوب رو بفرست"
+    )
+
+# ========= JOIN CHECK =========
+@bot.callback_query_handler(func=lambda c: c.data == "check_join")
+def check_join(c):
+    if is_member(c.from_user.id):
+        bot.answer_callback_query(c.id, "✅ عضویت تأیید شد")
+        bot.send_message(c.message.chat.id, "حالا لینک رو بفرست ✅")
+    else:
+        bot.answer_callback_query(c.id, "❌ هنوز عضو نیستی", show_alert=True)
+
+# ========= SOCIAL CALLBACK =========
+@bot.callback_query_handler(func=lambda c: c.data.startswith("social_"))
+def social_choice(c):
+    choice = c.data.split("_")[1]
+    url = social_wait.pop(c.from_user.id)
+
+    if choice in ["video", "both"]:
+        v = download(url)
+        with open(v, "rb") as f:
+            bot.send_video(c.message.chat.id, f)
+
+    if choice in ["audio", "both"]:
+        a = download(url, audio=True)
+        with open(a, "rb") as f:
+            bot.send_audio(c.message.chat.id, f)
+
+    bot.answer_callback_query(c.id)
+
+# ========= YOUTUBE CALLBACK =========
 @bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
-def yt_quality(c):
+def yt_choice(c):
     q = c.data.split("_")[1]
     url = yt_wait.pop(c.from_user.id)
 
     if q == "audio":
-        file = download
+        f = download(url, audio=True)
+        with open(f, "rb") as a:
+            bot.send_audio(c.message.chat.id, a)
+    else:
+        f = download(url, quality=q)
+        with open(f, "rb") as v:
+            bot.send_video(c.message.chat.id, v)
+
+    bot.answer_callback_query(c.id)
+
+# ========= MESSAGE =========
+@bot.message_handler(func=lambda m: True)
+def handle(m):
+    if not is_member(m.from_user.id):
+        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
+        return
+
+    text = m.text.strip()
+
+    # YouTube
+    if "youtube.com" in text or "youtu.be" in text:
+        yt_wait[m.from_user.id] = text
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            types.InlineKeyboardButton("🎬 360p", callback_data="yt_360"),
+            types.InlineKeyboardButton("🎬 480p", callback_data="yt_480"),
+            types.InlineKeyboardButton("🎬 720p", callback_data="yt_720"),
+            types.InlineKeyboardButton("🎬 1080p", callback_data="yt_1080"),
+            types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="yt_audio")
+        )
+        bot.send_message(m.chat.id, "کیفیت موردنظر رو انتخاب کن:", reply_markup=kb)
+        return
+
+    # Instagram / TikTok / Pinterest
+    if any(x in text for x in ["instagram.com", "tiktok.com", "pinterest"]):
+        social_wait[m.from_user.id] = text
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton("🎬 فقط ویدیو", callback_data="social_video"),
+            types.InlineKeyboardButton("🎵 فقط آهنگ", callback_data="social_audio"),
+            types.InlineKeyboardButton("🎬🎵 ویدیو + آهنگ", callback_data="social_both")
+        )
+        bot.send_message(m.chat.id, "چی می‌خوای؟", reply_markup=kb)
+        return
+
+    bot.send_message(m.chat.id, "❌ لینک معتبر نیست")
+
+# ========= RUN =========
+bot.infinity_polling()
