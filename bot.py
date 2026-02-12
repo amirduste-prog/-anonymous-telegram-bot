@@ -2,7 +2,6 @@ import os
 import telebot
 from telebot import types
 import yt_dlp
-import requests
 
 # ========= ENV =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -27,8 +26,14 @@ def is_member(user_id):
 def join_keyboard():
     kb = types.InlineKeyboardMarkup()
     if CHANNEL_USERNAME:
-        kb.add(types.InlineKeyboardButton("🔗 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"))
-    kb.add(types.InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join"))
+        kb.add(types.InlineKeyboardButton(
+            "🔗 عضویت در کانال",
+            url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
+        ))
+    kb.add(types.InlineKeyboardButton(
+        "✅ بررسی عضویت",
+        callback_data="check_join"
+    ))
     return kb
 
 # ========= START =========
@@ -47,7 +52,7 @@ def start(m):
         "✅ لینک اینستا، تیک‌تاک، پینترست یا یوتیوب رو بفرست"
     )
 
-# ========= CALLBACK =========
+# ========= CALLBACK JOIN =========
 @bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def check_join(c):
     if is_member(c.from_user.id):
@@ -58,69 +63,42 @@ def check_join(c):
 
 # ========= ADMIN =========
 @bot.message_handler(commands=["member"])
-def members(m):
+def member_cmd(m):
     if m.from_user.id != ADMIN_ID:
         return
-
     try:
-        chat = bot.get_chat(CHANNEL_USERNAME)
-        count = chat.get_member_count()
+        count = bot.get_chat(CHANNEL_USERNAME).get_member_count()
         bot.send_message(m.chat.id, f"👥 تعداد اعضا: {count}")
     except Exception as e:
-        bot.send_message(m.chat.id, f"خطا: {e}")
+        bot.send_message(m.chat.id, str(e))
 
 # ========= DOWNLOAD =========
-def download_media(url, audio=False):
+def download(url, audio=False, quality=None):
+    if audio:
+        fmt = "bestaudio/best"
+    elif quality:
+        fmt = f"bestvideo[height<={quality}]+bestaudio/best"
+    else:
+        fmt = "best"
+
     opts = {
+        "format": fmt,
         "outtmpl": "/tmp/%(title)s.%(ext)s",
-        "format": "bestaudio/best" if audio else "best",
         "quiet": True
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        return filename
+        return ydl.prepare_filename(info)
 
-# ========= YOUTUBE ASK =========
-user_waiting = {}
+# ========= YOUTUBE STATE =========
+yt_wait = {}
 
-@bot.message_handler(func=lambda m: True)
-def handle(m):
-    if not is_member(m.from_user.id):
-        bot.send_message(m.chat.id, "❗ عضو کانال شو", reply_markup=join_keyboard())
-        return
+# ========= CALLBACK QUALITY =========
+@bot.callback_query_handler(func=lambda c: c.data.startswith("yt_"))
+def yt_quality(c):
+    q = c.data.split("_")[1]
+    url = yt_wait.pop(c.from_user.id)
 
-    text = m.text.strip()
-
-    # Waiting for YouTube choice
-    if m.from_user.id in user_waiting:
-        url = user_waiting.pop(m.from_user.id)
-        audio = text == "🎵 آهنگ"
-        file = download_media(url, audio)
-        with open(file, "rb") as f:
-            if audio:
-                bot.send_audio(m.chat.id, f)
-            else:
-                bot.send_video(m.chat.id, f)
-        return
-
-    # YouTube
-    if "youtube.com" in text or "youtu.be" in text:
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        kb.add("🎵 آهنگ", "🎬 ویدیو")
-        user_waiting[m.from_user.id] = text
-        bot.send_message(m.chat.id, "چی می‌خوای؟", reply_markup=kb)
-        return
-
-    # Instagram / TikTok / Pinterest
-    if any(x in text for x in ["instagram.com", "tiktok.com", "pinterest"]):
-        file = download_media(text, audio=False)
-        with open(file, "rb") as f:
-            bot.send_video(m.chat.id, f)
-        return
-
-    bot.send_message(m.chat.id, "❌ لینک معتبر نیست")
-
-# ========= RUN =========
-bot.infinity_polling()
+    if q == "audio":
+        file = download
